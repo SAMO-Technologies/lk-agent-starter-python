@@ -1,73 +1,56 @@
-# This sample Dockerfile creates a production-ready container for a LiveKit voice AI agent
-# syntax=docker/dockerfile:1
-
-# Use the official UV Python base image with Python 3.11 on Debian Bookworm
-# UV is a fast Python package manager that provides better performance than pip
-# We use the slim variant to keep the image size smaller while still having essential tools
+# Use a Python image with uv pre-installed
 FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim
 
-# Keeps Python from buffering stdout and stderr to avoid situations where
-# the application crashes without emitting any logs due to buffering.
-ENV PYTHONUNBUFFERED=1
+# Install the project into `/app`
+WORKDIR /app
 
-# Create a non-privileged user that the app will run under.
-# See https://docs.docker.com/develop/develop-images/dockerfile_best-practices/#user
+# Enable bytecode compilation
+ENV UV_COMPILE_BYTECODE=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Create non-root user
 ARG UID=10001
 RUN adduser \
     --disabled-password \
     --gecos "" \
     --home "/home/appuser" \
-    --shell "/sbin/nologin" \
+    --shell "/usr/sbin/nologin" \
     --uid "${UID}" \
     appuser
 
-# Install build dependencies required for Python packages with native extensions
-# gcc: C compiler needed for building Python packages with C extensions
-# python3-dev: Python development headers needed for compilation
-# We clean up the apt cache after installation to keep the image size down
-RUN apt-get update && \
-    apt-get install -y \
+# Copy from the cache instead of linking since it's a mounted volume
+ENV UV_LINK_MODE=copy
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    python3-dev \
+    g++ \
+    libffi-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory to the user's home directory
-# This is where our application code will live
-WORKDIR /home/appuser
 
-# Copy all application files into the container
-# This includes source code, configuration files, and dependency specifications
-# (Excludes files specified in .dockerignore)
-COPY . .
 
-# Change ownership of all app files to the non-privileged user
-# This ensures the application can read/write files as needed
-RUN chown -R appuser:appuser /home/appuser
+# Then, add the rest of the project source code and install it
+# Installing separately from its dependencies allows optimal layer caching
+COPY . /app
 
-# Switch to the non-privileged user for all subsequent operations
-# This improves security by not running as root
-USER appuser
+# Place executables in the environment at the front of the path
+# ENV PATH="/app/.venv/bin:$PATH"
 
-# Create a cache directory for the user
-# This is used by UV and Python for caching packages and bytecode
-RUN mkdir -p /home/appuser/.cache
+WORKDIR /home/appuser/app
 
-# Install Python dependencies using UV's lock file
-# --locked ensures we use exact versions from uv.lock for reproducible builds
-# This creates a virtual environment and installs all dependencies
-# Ensure your uv.lock file is checked in for consistency across environments
-RUN uv sync --locked
 
-# Pre-download any ML models or files the agent needs
-# This ensures the container is ready to run immediately without downloading
-# dependencies at runtime, which improves startup time and reliability
-RUN uv run src/agent.py download-files
+# Copy project files
+COPY --chown=appuser:appuser pyproject.toml uv.lock ./
+# Install Python dependencies inside a uv-managed venv
+RUN uv sync
 
-# Expose the healthcheck port
-# This allows Docker and orchestration systems to check if the container is healthy
+# Copy rest of code
+COPY --chown=appuser:appuser . .
+
+# Pre-download any required assets
+RUN uv run python main.py download-files
+
 EXPOSE 8081
-
-# Run the application using UV
-# UV will activate the virtual environment and run the agent
-# The "start" command tells the worker to connect to LiveKit and begin waiting for jobs
-CMD ["uv", "run", "src/agent.py", "start"]
+CMD ["uv", "run", "python", "main.py", "start"]

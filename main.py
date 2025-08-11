@@ -1,17 +1,12 @@
 import logging
-
+from livekit import agents
 from livekit.agents import (
     Agent,
     AgentSession,
-    JobContext,
     RoomInputOptions,
-    RunContext,
-    WorkerOptions,
-    cli,
 )
-from livekit.agents.llm import function_tool
-from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.plugins import openai, noise_cancellation
+
 
 logger = logging.getLogger("agent")
 
@@ -27,22 +22,9 @@ class Assistant(Agent):
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
-    @function_tool
-    async def lookup_weather(self, context: RunContext, location: str):
-        """Use this tool to look up current weather information in the given location.
-
-        If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-
-        Args:
-            location: The location to look up weather information for (e.g. city name)
-        """
-
-        logger.info(f"Looking up weather for {location}")
-
-        return "sunny with a temperature of 70 degrees."
 
 
-async def entrypoint(ctx: JobContext):
+async def entrypoint(ctx: agents.JobContext):
     # Logging setup
     # Add any other context you want in all log entries here
 
@@ -91,10 +73,9 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            num_idle_processes=1,
-            initialize_process_timeout=300,
-        )
-    )
+     agents.cli.run_app(agents.WorkerOptions(
+        entrypoint_fnc=entrypoint,
+        job_memory_warn_mb=12000,
+        num_idle_processes=1,
+        initialize_process_timeout=120
+        ))
